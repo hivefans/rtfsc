@@ -174,6 +174,31 @@ m.synchronize {
 }
 ```
 
+*Queue*
+
+Queue就像一条读写数据的管道。提供数据的线程在一边写入数据，而读取数据的线程则在另一边读出数据。若Queue中没有可供读取的数据时，读取数据的线程会挂起等待数据的到来。
+
+
+```
+require 'thread'
+
+q = Queue.new
+
+(1..10).each do
+  Thread.new {
+    while line = q.pop
+      print "#{Thread.current} #{line}"
+    end
+  }
+end
+
+while (u = gets)
+  q.push(u)
+end
+```
+当你输入字符串的时候，可以看到每次`Thread.current`都不一样。
+
+
 
 
 
