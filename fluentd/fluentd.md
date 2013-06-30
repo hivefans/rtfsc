@@ -200,6 +200,58 @@ end
 ```
 当你输入字符串的时候，可以看到每次`Thread.current`都不一样。
 
+[*Monitor*](https://github.com/zhuoyikang/rtfsc/blob/master/fluentd/monitor_tr.rb)
+
+monitor和mutex最大的区别是mutx不可以嵌套，但monitor可以。
+
+```
+require 'monitor'
+
+# 和mutex一样的用法，但是嵌套没有问题.
+lock = Monitor.new
+lock.synchronize do
+  lock.synchronize do
+    puts "nce"
+  end
+end
+```
+
+可以通过继承monitor获取其synchronize方法：
+
+```
+class Counter < Mutex
+  attr_reader :number
+  def initialize
+    @number = 0
+    super # 初始化父类数据
+  end
+
+  def plus
+    synchronize do
+      @number += 1
+    end
+  end
+end
+
+c = Counter.new
+t1 = Thread.new { 10000.times { c.plus } }
+t2 = Thread.new { 10000.times { c.plus } }
+t1.join
+t2.join
+puts c.number
+```
+
+或者将其mixin:
+
+```
+class Counter
+    include MonitorMixin
+	…	
+end
+```
+
+以上内容基本就是ruby的线程同步机制了，现在看fluentd:
+
 
 
 
