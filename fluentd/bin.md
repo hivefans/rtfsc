@@ -1,24 +1,3 @@
-项目地址：[fluentd](https://github.com/fluent/fluentd?source=c)
-
-项目官网：[http://fluentd.org/](http://fluentd.org/)
-
-项目描述：一个ruby编写的日志搜集系统。Log Everything in JSON
-
-# 1. intro
----
-fluentd是最近在使用的一个日志收集系统，它可以很方便的为其编写不同的输入输出插件，并且已经有了很多支持：[plugin](http://fluentd.org/plugin/)。因为工作中经常使用ruby，所以便对其源码产生了兴趣，我将对其进行一步步细致的分析学习，以加深对ruby的理解和更好的使用它。
-
-READ THE * SOURCE CODE.
-
-整个项目路径如下：
-
-```
-AUTHORS         Gemfile         bin             fluentd.gemspec
-COPYING         README.rdoc     conf            lib
-ChangeLog       Rakefile        fluent.conf     test
-```
-
-
 # 2. 可执行文件(bin)
 ---
 [bin](https://github.com/fluent/fluentd/tree/master/bin) 路径下存放了fluentd的可执行文件脚本：
@@ -207,7 +186,7 @@ monitor和mutex最大的区别是mutx不可以嵌套，但monitor可以。
 ```
 require 'monitor'
 
-# 和mutex一样的用法，但是嵌套没有问题.
+#和mutex一样的用法，但是嵌套没有问题.
 lock = Monitor.new
 lock.synchronize do
   lock.synchronize do
@@ -252,6 +231,41 @@ end
 
 以上内容基本就是ruby的线程同步机制了，现在看fluentd:
 
+
+### 2.2.3 writer
+
+writer mixin了Monitor，而TimerThread是一个简单的定时器实现。
+
+```
+class Writer
+  include MonitorMixin
+  
+   class TimerThread
+    def initialize(writer)
+      @writer = writer
+    end
+
+	# 以TimerThread的run方法开始一个线程，而已。
+    def start
+      @finish = false
+      @thread = Thread.new(&method(:run))
+    end
+
+    def shutdown
+      @finish = true
+      @thread.join
+    end
+
+    def run
+      until @finish
+        sleep 1
+        @writer.on_timer
+      end
+    end
+    
+end
+
+```
 
 
 
