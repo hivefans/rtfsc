@@ -10,9 +10,11 @@ op.on('-p', '--port PORT', "test tcp port (default #{port})", Integer) { |i|
   port = i
 }
 
-puts "argv #{ARGV}"
-if ARGV.length != 1
-  puts op.to_s
-end
+op.parse!(ARGV)
+
+# puts "argv #{ARGV}"
+# if ARGV.length != 1
+#   puts op.to_s
+# end
 # op.parse!(ARGV)
 # puts op.to_s

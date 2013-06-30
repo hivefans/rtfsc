@@ -46,7 +46,8 @@ File.join是把自己的参数组成一个目录形式的方法
 
 ## 2.2 fluent/command/cat
 ---
-[链接](https://github.com/fluent/fluentd/blob/master/lib/fluent/command/cat.rb)
+[代码链接](https://github.com/fluent/fluentd/blob/master/lib/fluent/command/cat.rb)
+[OptionParser.html](http://ruby-doc.org/stdlib-2.0/libdoc/optparse/rdoc/OptionParser.html)
 
 ```
 require 'optparse'
@@ -92,9 +93,86 @@ rescue
 end
 ```
 
-`ARGV` 是ruby程序使用的参数的常量数组。
+`ARGV` 是ruby程序使用的参数的常量数组。而`$!`是一个ruby默认的全局变量：
 
+* $! 最近一次的错误信息
+* $@ 错误产生的位置
+* $_ gets最近读的字符串
+* $. 解释器最近读的行数(line number)
+* $& 最近一次与正则表达式匹配的字符串
+* $~ 作为子表达式组的最近一次匹配
+* $n 最近匹配的第n个子表达式(和$~[n]一样)
+* $= 是否区别大小写的标志
+* $/ 输入记录分隔符
+* $\ 输出记录分隔符
+* $0 Ruby脚本的文件名
+* $* 命令行参数
+* $$ 解释器进程ID
+* $? 最近一次执行的子进程退出状态
 
+这里有篇 [demo](http://www.cnblogs.com/lwm-1988/archive/2012/04/19/2456932.html)。
+
+下面require了若干个库:
+
+```
+require 'thread'
+require 'monitor'
+require 'socket'
+require 'yajl'
+require 'msgpack'
+```
+
+### 2.2.1 thread
+
+Ruby的多线程编程库，先学习一下其基本用法：
+
+```
+require 'thread'
+require 'net/http'
+pages = %w(www.iteye.com www.csdn.net www.sina.com.cn www.google.cn)
+threads = []
+
+for page in pages
+  threads << Thread.new(page) do |url|
+    h = Net::HTTP.new(url, 80)
+    puts "The URL is #{url} #{h}"
+    resp = h.get('/')
+    puts "The #{url} response:#{resp.message}"
+  end
+end
+
+threads.each { |t|t.join  }
+```
+Ruby中使用的线程是用户级线程，由Ruby解释器进行切换管理。其效率要低于由OS管理线程的效率，且不能使用多个CPU。
+
+[官方文档](http://ruby-doc.org/core-2.0/Thread.html)
+
+### 2.2.2 线程同步
+
+有线程就有线程同步机制：
+
+*Mutex*
+
+Mutex是mutual-exclusion lock（互斥锁）的简称。若对Mutex加锁时发现已经处于锁定状态时，线程会挂起直到解锁为止。
+
+在并行访问中保护共享数据时，可以使用下列代码（m是Mutex的实例）
+
+```
+begin
+   m.lock
+   # 访问受m保护的共享数据
+ensure
+   m.unlock
+end
+```
+
+Mutex有个synchronize方法可以简化这一过程。
+
+```
+m.synchronize {
+   # 访问受m保护的共享数据
+}
+```
 
 
 
