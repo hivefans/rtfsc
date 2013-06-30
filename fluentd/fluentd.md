@@ -126,6 +126,8 @@ require 'msgpack'
 
 Ruby的多线程编程库，先学习一下其基本用法：
 
+[thread](https://github.com/zhuoyikang/rtfsc/blob/master/fluentd/thread_tr.rb)
+
 ```
 require 'thread'
 require 'net/http'
@@ -151,7 +153,7 @@ Ruby中使用的线程是用户级线程，由Ruby解释器进行切换管理。
 
 有线程就有线程同步机制：
 
-*Mutex*
+[*Mutex*](https://github.com/zhuoyikang/rtfsc/blob/master/fluentd/mutex_tr.rb)
 
 Mutex是mutual-exclusion lock（互斥锁）的简称。若对Mutex加锁时发现已经处于锁定状态时，线程会挂起直到解锁为止。
 
@@ -174,7 +176,7 @@ m.synchronize {
 }
 ```
 
-*Queue*
+[*Queue*](https://github.com/zhuoyikang/rtfsc/blob/master/fluentd/queue_tr.rb)
 
 Queue就像一条读写数据的管道。提供数据的线程在一边写入数据，而读取数据的线程则在另一边读出数据。若Queue中没有可供读取的数据时，读取数据的线程会挂起等待数据的到来。
 
