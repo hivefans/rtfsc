@@ -18,11 +18,7 @@ COPYING         README.rdoc     conf            lib
 ChangeLog       Rakefile        fluent.conf     test
 ```
 
-下一节：[bin分析](https://github.com/zhuoyikang/rtfsc/blob/master/fluentd/2.bin.md)
-
 # 2. 可执行文件(bin)
-
-[bin](https://github.com/fluent/fluentd/tree/master/bin) 路径下存放了fluentd的可执行文件脚本：
 
 ## 2.1 fluent-cat
 
@@ -200,7 +196,7 @@ while (u = gets)
   q.push(u)
 end
 ```
-当你输入字符串的时候，可以看到每次`Thread.current`都不一样。
+当你输入字符串的时候，可以看到每次`Thread.current`都不一样，放心Queue是线程安全的.
 
 [*Monitor*](https://github.com/zhuoyikang/rtfsc/blob/master/fluentd/monitor_tr.rb)
 
@@ -300,11 +296,11 @@ Sadayuki Furuhashi, creator of Fluentd.
 ```
 或许MessagePack也可以用作游戏通信协议，可以再深入评定一下。
 
-与JSON的比较 
+与JSON的比较
 
-1.序列化和反序列化所需要的时间少。通过30000条的记录来测试，msgpack序列化的时间比使用jason来序列化JSON的时间要少三分之一；而反序列化的时间则要少一半。
- 
-2.生成的文件体积小。同样也是基于30000条记录来测试，msgpack序列化后生成的二进制文件比用jason序列化出来的时间要少一半。 
+1.序列化和反序列化所需要的时间少。通过30000条的记录来测试，msgpack序列化的时间比使用json来序列化JSON的时间要少三分之一；而反序列化的时间则要少一半。
+
+2.生成的文件体积小。同样也是基于30000条记录来测试，msgpack序列化后生成的二进制文件比用json序列化出来的时间要少一半。
 
 [Yajl](https://github.com/brianmario/yajl-ruby) :A streaming JSON parsing and encoding library for Ruby (C bindings to yajl)
 
@@ -379,11 +375,120 @@ when 'json'
 
 默认的fluentd的配置在env中获得`require 'fluent /env'`。
 
-由于ThreadTimer，Writer对象的on_timer方法会被1s间隔的调用，每次调用会将@pending数组的数据尝试写到服务器。
+由于ThreadTimer，Writer对象的on_timer方法会被1s间隔的调用，每次调用会将@pending数组的数据尝试写到服务器。如果写入失败，则将其放入pending队列，等到1秒钟后下一次定时调用时将其写入。
+
 
 以上内容就是cat命令。
 
 
-## 2.3 bin/*
+## 2.2 fluentd
 
-bin路径下还有其他几个命令, fluent-cat fluent-debug fluent-gem fluentd，他们的代码都和fluent-cat差不多，主要的逻辑功能还是在lib/fluent/command中实现。
+和cat一样，bin/fluentd对应于lib/fluentd/command/fluentd.rb。
+
+开始的部分和cat一样，通过OptionParser解析命令行参数:
+
+```
+op = OptionParser.new
+op.version = Fluent::VERSION
+
+# default values
+opts = {
+  :config_path => Fluent::DEFAULT_CONFIG_PATH,
+  :plugin_dirs => [Fluent::DEFAULT_PLUGIN_DIR],
+  :log_level => Fluent::Log::LEVEL_INFO,
+  :log_path => nil,
+  :daemonize => false,
+  :libs => [],
+  :setup_path => nil,
+  :chuser => nil,
+  :chgroup => nil,
+  :suppress_interval => 0,
+}
+
+op.on('-s', "--setup [DIR=#{File.dirname(Fluent::DEFAULT_CONFIG_PATH)}]", "install sample configuration file to the directory") {|s|
+  opts[:setup_path] = s || File.dirname(Fluent::DEFAULT_CONFIG_PATH)
+}
+```
+
+`Fluent::VERSION`在[version.rb](https://github.com/fluent/fluentd/blob/master/lib/fluent/version.rb)中定义，可以看出整个Fluentd的代码被包含在了 module Fluent中，它起到了命名空间的作用:
+
+```
+module Fluent
+
+VERSION = '0.10.36'
+
+end
+```
+
+在[env.rb](https://github.com/fluent/fluentd/blob/master/lib/fluent/env.rb)中定义了一系列的配置参数:
+
+```
+module Fluent
+DEFAULT_CONFIG_PATH = ENV['FLUENT_CONF'] || '/etc/fluent/fluent.conf'
+DEFAULT_PLUGIN_DIR = ENV['FLUENT_PLUGIN'] || '/etc/fluent/plugin'
+DEFAULT_SOCKET_PATH = ENV['FLUENT_SOCKET'] || '/var/run/fluent/fluent.sock'
+DEFAULT_LISTEN_PORT = 24224
+DEFAULT_FILE_PERMISSION = 0644
+end
+```
+
+接下来这段代码在安装路径建立plugin文件夹和fluentd.conf配置文件:
+
+```
+if setup_path = opts[:setup_path]
+  require 'fileutils'
+  FileUtils.mkdir_p File.join(setup_path, "plugin")
+  confpath = File.join(setup_path, "fluent.conf")
+  if File.exist?(confpath)
+    puts "#{confpath} already exists."
+  else
+    File.open(confpath, "w") {|f|
+      conf = File.read File.join(File.dirname(__FILE__), "..", "..", "..", "fluent.conf")
+      f.write conf
+    }
+    puts "Installed #{confpath}."
+  end
+  exit 0
+end
+```
+
+最后加载supervisor(监督者)模块，进行fluentd程序启动。
+
+```
+require 'fluent/supervisor'
+Fluent::Supervisor.new(opts).start
+```
+# 3.监督者(Supervisor)
+
+监督者是这样一个概念，它对程序中的工作者起监督作用，当其异常退出或者状态异常时对其进行重启，fluentd的监督者在[supervisor.rb](https://github.com/fluent/fluentd/blob/master/lib/fluent/supervisor.rb)中定义：
+
+```
+class Supervisor
+  class LoggerInitializer
+    def initialize(path, level, chuser, chgroup)
+      @path = path
+      @level = level
+      @chuser = chuser
+      @chgroup = chgroup
+    end
+ ...
+```
+内部定义了一个LoggerInitializer类，输出文件的路径定义哎path变量中，如果没有者使用标准输出。在Supervisor中的init函数修改了输出日志文件的权限:
+
+```
+  if @path && @path != "-"
+        @io = File.open(@path, "a")
+        if @chuser || @chgroup
+          chuid = @chuser ? `id -u #{@chuser}`.to_i : nil
+          chgid = @chgroup ? `id -g #{@chgroup}`.to_i : nil
+          File.chown(chuid, chgid, @path)
+        end
+      else
+        @io = STDOUT
+      end
+
+    $log = Fluent::Log.new(@io, @level)   # 开启一个Log实例
+    $log.enable_color(false) if @path   # 开启颜色
+    $log.enable_debug if @level <= Fluent::Log::LEVEL_DEBUG
+
+```
