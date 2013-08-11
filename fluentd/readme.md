@@ -684,13 +684,14 @@ Process::GID.change_privilege(33)    #=> 33
 
 又称精灵进程，可使在终端启动的进程变为在后台执行，一般服务器程序都会把自己变成守护进程。变成守护进程有以下几个歩凑，以C语言为例:
 
-**1.在后台运行。**
+** 1.在后台运行 **
+
 为避免挂起控制终端将Daemon放入后台执行。方法是在进程中调用fork使父进程终止，让Daemon在子进程中后台执行。
 
     if(pid=fork())
         exit(0); //是父进程，结束父进程，子进程继续
 
-**2.脱离控制终端，登录会话和进程组 **
+** 2.脱离控制终端，登录会话和进程组 **
 
 进程属于一个进程组，进程组号（GID）就是进程组长的进程号（PID）。登录会话可以包含多个进程组。这些进程组共享一个控制终端。这个控制终端通常是创建进程的登录终端。控制终端，登录会话和进程组通常是从父进程继承下来的。我们的目的就是要摆脱它们，使之不受它们的影响。方法是在第1点的基础上，调用setsid()使进程成为会话组长：
 
@@ -698,7 +699,7 @@ Process::GID.change_privilege(33)    #=> 33
 
 说明：当进程是会话组长时setsid()调用失败。但第一点已经保证进程不是会话组长。setsid()调用成功后，进程成为新的会话组长和新的进程组长，并与原来的登录会话和进程组脱离。由于会话过程对控制终端的独占性，进程同时与控制终端脱离。
 
-**3.禁止进程重新打开控制终端**
+** 3.禁止进程重新打开控制终端 **
 
 现在，进程已经成为无终端的会话组长。但它可以重新申请打开一个控制终端。可以通过使进程不再成为会话组长来禁止进程重新打开控制终端：
 
@@ -721,10 +722,157 @@ Process::GID.change_privilege(33)    #=> 33
 
 进程从创建它的父进程那里继承了文件创建掩模。它可能修改守护进程所创建的文件的存取位。为防止这一点，将文件创建掩模清除：umask(0);
 
-** 7. 处理SIGCHLD信号**
+** 7. 处理SIGCHLD信号 **
 
 处理SIGCHLD信号并不是必须的。但对于某些进程，特别是服务器进程往往在请求到来时生成子进程处理请求。如果父进程不等待子进程结束，子进程将成为僵尸进程（zombie）从而占用系统资源。如果父进程等待子进程结束，将增加父进程的负担，影响服务器进程的并发性能。在Linux下可以简单地将 SIGCHLD信号的操作设为SIG_IGN。
 
     signal(SIGCHLD,SIG_IGN);
 
 这样，内核在子进程结束时不会产生僵尸进程。这一点与BSD4不同，BSD4下必须显式等待子进程结束才能释放僵尸进程。
+
+## 3.2.2 fluentd守护进程编程
+
+再看看fluentd-ruby是如何实现守护进程的：
+
+对于ruby来说，fork会返回两次，对于父进程返回fork的进程id，对于子进程返回nil，所以这段代码完成第一步:
+
+```
+ # 创建一个管道，用来和父进程通信。
+ @wait_daemonize_pipe_r, @wait_daemonize_pipe_w = IO.pipe
+ if fork
+      # console process, 父进程只需要读，因此将写端关闭。
+      @wait_daemonize_pipe_w.close
+      @wait_daemonize_pipe_w = nil
+      wait_daemonize
+      exit 0
+    end
+```
+
+父进程不会像之前的C语言描述流程那样立刻退出，而是等待精灵化完成，并将监督者的pid写入文件再退出.
+```
+ def wait_daemonize
+    supervisor_pid = @wait_daemonize_pipe_r.read
+    if supervisor_pid.empty?
+      # initialization failed
+      exit! 1
+    end
+
+    @wait_daemonize_pipe_r.close
+    @wait_daemonize_pipe_r = nil
+
+    # write pid file
+    File.open(@daemonize, "w") {|f|
+      f.write supervisor_pid
+    }
+  end
+
+```
+
+对于子进程，将读端关闭，因为不需要读:
+```
+    # daemonize intermediate process
+    @wait_daemonize_pipe_r.close
+    @wait_daemonize_pipe_r = nil
+```
+
+下面这句代码比较有意思：
+```
+    # in case the child process forked during run_configure
+    @wait_daemonize_pipe_w.fcntl(Fcntl::F_SETFD, Fcntl::FD_CLOEXEC)
+```
+Fcntl::FD_CLOEXEC有什么作用呢，我们知道当进程fork一个子进程时，是会继承其打开的文件描述符的，而这个Fcntl::FD_CLOEXEC标志支持通过execl执行的程序里，此描述符被关闭，不能再使用它;
+
+```
+\#include <fcntl.h>
+\#include <unistd.h>
+\#include <stdio.h>
+\#include <string.h>
+
+int main(void)
+{
+        int fd,pid;
+        char buffer[20];
+        fd=open("wo.txt",O_RDONLY);
+        printf("%d/n",fd);
+        int val=fcntl(fd,F_GETFD);
+        val|=FD_CLOEXEC;
+        fcntl(fd,F_SETFD,val);
+
+        pid=fork();
+        if(pid==0)
+        {
+                //子进程中，此描述符并不关闭，仍可使用
+                char child_buf[2];
+                memset(child_buf,0,sizeof(child_buf) );
+                ssize_t bytes = read(fd,child_buf,sizeof(child_buf)-1 );
+                printf("child, bytes:%d,%s/n/n",bytes,child_buf);
+
+                //execl执行的程序里，此描述符被关闭，不能再使用它
+                char fd_str[5];
+                memset(fd_str,0,sizeof(fd_str));
+                sprintf(fd_str,"%d",fd);
+                int ret = execl("./exe1","exe1",fd_str,NULL);
+                if(-1 == ret)
+                        perror("ececl fail:");
+        }
+        waitpid(pid,NULL,0);
+        memset(buffer,0,sizeof(buffer) );
+        ssize_t bytes = read(fd,buffer,sizeof(buffer)-1 );
+        printf("parent, bytes:%d,%s/n/n",bytes,buffer);
+}
+
+```
+
+```
+cat exe1.c
+#include <fcntl.h>
+#include <stdio.h>
+#include <assert.h>
+#include <string.h>
+int main(int argc, char **args)
+{
+        char buffer[20];
+        int fd = atoi(args[1]);
+        memset(buffer,0,sizeof(buffer) );
+        ssize_t bytes = read(fd,buffer,sizeof(buffer)-1);
+        if(bytes < 0)
+        {
+                perror("exe1: read fail:");
+                return -1;
+        }
+        else
+        {
+                printf("exe1: read %d,%s/n/n",bytes,buffer);
+        }
+        return 0;
+}
+```
+
+以下是守护进程的剩余代码:
+
+```
+# 将进程设置为进程组组长:
+Process.setsid
+# 第二次fork.
+exit!(0) if fork
+# 清楚文件创建掩码
+File.umask(0)
+```
+
+
+以下代码将标准输入输出和错误定向到/dev/null，将监督者进程的pid写入到文件，然后结束。
+```
+ def finish_daemonize
+    if @wait_daemonize_pipe_w
+      STDIN.reopen("/dev/null")
+      STDOUT.reopen("/dev/null", "w")
+      STDERR.reopen("/dev/null", "w")
+      @wait_daemonize_pipe_w.write @supervisor_pid.to_s
+      @wait_daemonize_pipe_w.close
+      @wait_daemonize_pipe_w = nil
+    end
+  end
+```
+
+## 3.3 引擎初始化
+
