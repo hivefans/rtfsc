@@ -381,7 +381,7 @@ when 'json'
 以上内容就是cat命令。
 
 
-## 2.2 fluentd
+## 2.3 fluentd
 
 和cat一样，bin/fluentd对应于lib/fluentd/command/fluentd.rb。
 
@@ -491,4 +491,152 @@ class Supervisor
     $log.enable_color(false) if @path   # 开启颜色
     $log.enable_debug if @level <= Fluent::Log::LEVEL_DEBUG
 
+```
+
+linux id 命令:
+
+    -g或--group 　显示用户所属群组的ID。
+    -G或--groups 　显示用户所属附加群组的ID。
+    -n或--name 　显示用户，所属群组或附加群组的名称。
+    -r或--real 　显示实际ID。
+    -u或--user 　显示用户ID。
+
+而File.chown函数是改变文件所属的用户和组，只有超级用户才有权限改变一个文件所属的用户和组。这个文件的所有者可以把该文件的组改为其所有者所在的任意组。
+
+Supervisor的initialize主要是开启了一个Log模块，使用了在OptionParser的参数:
+
+```
+ def initialize(opt)
+    @config_path = opt[:config_path]
+    @log_path = opt[:log_path]
+    @log_level = opt[:log_level]
+    @daemonize = opt[:daemonize]
+    @chgroup = opt[:chgroup]
+    @chuser = opt[:chuser]
+    @libs = opt[:libs]
+    @plugin_dirs = opt[:plugin_dirs]
+    @inline_config = opt[:inline_config]
+    @suppress_interval = opt[:suppress_interval]
+    @dry_run = opt[:dry_run]
+
+    @log = LoggerInitializer.new(@log_path, @log_level, @chuser, @chgroup)
+    @finished = false
+    @main_pid = nil
+  end
+
+```
+## 3.1 Fluent::Log模块
+
+Log模块提供颜色输出。
+
+```
+  module TTYColor
+    RESET   = "\033]R"
+    CRE     = "\033[K"
+    CLEAR   = "\033c"
+    NORMAL  = "\033[0;39m"
+    RED     = "\033[1;31m"
+    GREEN   = "\033[1;32m"
+    YELLOW  = "\033[1;33m"
+    BLUE    = "\033[1;34m"
+    MAGENTA = "\033[1;35m"
+    CYAN    = "\033[1;36m"
+    WHITE   = "\033[1;37m"
+  end
+```
+
+在终端上输出控制字符可以输出有颜色的字符串，比如你试试：`noglob echo "\033[1;34mthis is blues\033]R"`，就有颜色了。
+
+以下是各种日志等级:
+```
+LEVEL_TRACE = 0
+LEVEL_DEBUG = 1
+LEVEL_INFO  = 2
+LEVEL_WARN  = 3
+LEVEL_ERROR = 4
+LEVEL_FATAL = 5
+```
+
+以下四行代码生成get和set函数:
+```
+ attr_accessor :out
+ attr_accessor :level
+ attr_accessor :tag
+ attr_accessor :time_format
+```
+
+在log的实现中，有一个实例变量： @threads_exclude_events，记录了互斥的线程列表。
+
+以trace为例，每个不同的日志等级包含三个函数：
+
+```
+  def on_trace(&block)
+    return if @level > LEVEL_TRACE
+    block.call if block
+  end
+
+  def trace(*args, &block)
+    return if @level > LEVEL_TRACE
+    args << block.call if block
+    time, msg = event(:trace, args)
+    puts [@color_trace, caller_line(time, 1, LEVEL_TRACE), msg, @color_reset].join
+  end
+  alias TRACE trace
+
+  def trace_backtrace(backtrace=$!.backtrace)
+    return if @level > LEVEL_TRACE
+    time = Time.now
+    backtrace.each {|msg|
+      puts ["  ", caller_line(time, 4, LEVEL_TRACE), msg].join
+    }
+    nil
+  end
+
+```
+
+&block指出了block是个proc，可以使用call函数调用。
+
+## 3.2 start
+
+start 函数完成程序的启动和精灵化:
+
+```
+ def start
+    require 'fluent/load'
+    @log.init
+
+    dry_run if @dry_run
+    start_daemonize if @daemonize
+    install_supervisor_signal_handlers
+    until @finished
+      supervise do
+        read_config
+        change_privilege
+        init_engine
+        install_main_process_signal_handlers
+        run_configure
+        finish_daemonize if @daemonize
+        run_engine
+        exit 0
+      end
+      $log.error "fluentd main process died unexpectedly. restarting." unless @finished
+    end
+  end
+```
+
+[loader.rb](https://github.com/fluent/fluentd/blob/master/lib/fluent/load.rb)包含加载了所fluentd所有的模块:
+
+```
+require 'thread'
+require 'socket'
+require 'fcntl'
+require 'time'
+...
+require 'cool.io'
+require 'fluent/env'
+require 'fluent/version'
+require 'fluent/log'
+require 'fluent/status'
+require 'fluent/config'
+...
 ```
