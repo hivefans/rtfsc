@@ -640,3 +640,91 @@ require 'fluent/status'
 require 'fluent/config'
 ...
 ```
+
+在ruby中可以使用以下代码捕获传递给进程的信号:
+
+```
+trap :INT do puts("int") end
+
+# 给监督者设置信号捕获函数
+def install_supervisor_signal_handlers
+
+# 收到:int, :term信号时如果main进程还没有退出，则把相应的信号也转给main.
+# 收到:hub信号时将对main进行重启。
+
+end
+
+# 给主进程设置信号捕获函数
+def install_main_process_signal_handlers
+# 收到:int, :term信号时fluentd主进程将停止
+# 收到:hub信号时将重启，但还未实现
+# 收到:user1信号时将刷新引擎
+```
+
+在supervisor中read_config函数读取配置文件，将其存放到@config_data。
+
+如果启动时指定了参数opt[:chgroup]，change_change_privilege函数在调用时将改变进程的real和有效组id。
+
+```
+Process::GID.change_privilege(group) → fixnum click to toggle source
+Change the current process’s real and effective group ID to that specified by group. Returns the new group ID. Not available on all platforms.
+
+[Process.gid, Process.egid]          #=> [0, 0]
+Process::GID.change_privilege(33)    #=> 33
+[Process.gid, Process.egid]          #=> [33, 33]
+```
+
+** 有效用户ID[编辑] **
+  有效用户ID（Effective UID，即EUID）与有效用户组ID（Effective Group ID，即EGID）在创建与访问文件的时候发挥作用；具体来说，创建文件时，系统内核将根据创建文件的进程的EUID与EGID设定文件的所有者/组属性，而在访问文件时，内核亦根据访问进程的EUID与EGID决定其能否访问文件。
+
+** 真实用户ID[编辑] **
+  真实用户ID（Real UID,即RUID）与真实用户组ID（Real GID，即RGID）用于辨识进程的真正所有者，且会影响到进程发送信号的权限。没有超级用户权限的进程仅在其RUID与目标进程的RUID相匹配时才能向目标进程发送信号，例如在父子进程间，子进程从父进程处继承了认证信息，使得父子进程间可以互相发送信号。
+
+## 3.2.1 守护进程编程
+
+又称精灵进程，可使在终端启动的进程变为在后台执行，一般服务器程序都会把自己变成守护进程。变成守护进程有以下几个歩凑，以C语言为例:
+
+**1.在后台运行。**
+为避免挂起控制终端将Daemon放入后台执行。方法是在进程中调用fork使父进程终止，让Daemon在子进程中后台执行。
+
+    if(pid=fork())
+        exit(0); //是父进程，结束父进程，子进程继续
+
+**2.脱离控制终端，登录会话和进程组 **
+
+进程属于一个进程组，进程组号（GID）就是进程组长的进程号（PID）。登录会话可以包含多个进程组。这些进程组共享一个控制终端。这个控制终端通常是创建进程的登录终端。控制终端，登录会话和进程组通常是从父进程继承下来的。我们的目的就是要摆脱它们，使之不受它们的影响。方法是在第1点的基础上，调用setsid()使进程成为会话组长：
+
+    setsid();
+
+说明：当进程是会话组长时setsid()调用失败。但第一点已经保证进程不是会话组长。setsid()调用成功后，进程成为新的会话组长和新的进程组长，并与原来的登录会话和进程组脱离。由于会话过程对控制终端的独占性，进程同时与控制终端脱离。
+
+**3.禁止进程重新打开控制终端**
+
+现在，进程已经成为无终端的会话组长。但它可以重新申请打开一个控制终端。可以通过使进程不再成为会话组长来禁止进程重新打开控制终端：
+
+    if(pid=fork())
+        exit(0); //结束第一子进程，第二子进程继续（第二子进程不再是会话组长）
+
+所以一般精灵进程都会fork两次.
+
+** 4.关闭打开的文件描述符 **
+
+进程从创建它的父进程那里继承了打开的文件描述符。如不关闭，将会浪费系统资源，造成进程所在的文件系统无法卸下以及引起无法预料的错误。按如下方法关闭它们：
+
+    for(i=0;i 关闭打开的文件描述符close(i);>
+
+** 5.改变当前工作目录 **
+
+进程活动时，其工作目录所在的文件系统不能卸下。一般需要将工作目录改变到根目录。对于需要转储核心，写运行日志的进程将工作目录改变到特定目录如 /tmpchdir("/")
+
+** 6.重设文件创建掩模 **
+
+进程从创建它的父进程那里继承了文件创建掩模。它可能修改守护进程所创建的文件的存取位。为防止这一点，将文件创建掩模清除：umask(0);
+
+** 7. 处理SIGCHLD信号**
+
+处理SIGCHLD信号并不是必须的。但对于某些进程，特别是服务器进程往往在请求到来时生成子进程处理请求。如果父进程不等待子进程结束，子进程将成为僵尸进程（zombie）从而占用系统资源。如果父进程等待子进程结束，将增加父进程的负担，影响服务器进程的并发性能。在Linux下可以简单地将 SIGCHLD信号的操作设为SIG_IGN。
+
+    signal(SIGCHLD,SIG_IGN);
+
+这样，内核在子进程结束时不会产生僵尸进程。这一点与BSD4不同，BSD4下必须显式等待子进程结束才能释放僵尸进程。
