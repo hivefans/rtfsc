@@ -876,3 +876,274 @@ File.umask(0)
 
 ## 3.3 引擎初始化
 
+下面代码进行引擎初始化，主要是加载插件:
+```
+def init_engine
+    require 'fluent/load'
+    Fluent::Engine.init
+    if @suppress_interval
+      Fluent::Engine.suppress_interval(@suppress_interval)
+    end
+
+    @libs.each {|lib|
+      require lib
+    }
+
+    @plugin_dirs.each {|dir|
+      if Dir.exist?(dir)
+        dir = File.expand_path(dir)
+        Fluent::Engine.load_plugin_dir(dir)
+      end
+    }
+  end
+```
+
+最后执行:
+```
+def run_engine
+    Fluent::Engine.run
+end
+```
+
+# 4 插件
+
+[plugin.rb](https://github.com/fluent/fluentd/blob/master/lib/fluent/plugin.rb )fluent支持三种不同类型的插件:输入，输出，缓冲。
+现在它已经具有有大量已实现[插件](http://fluentd.org/plugin/)，可以浏览一下有没有你想做的。
+
+`File.expand_path`将一个路径转为绝对路径：
+
+```
+File.expand_path("~oracle/bin")           #=> "/home/oracle/bin"
+File.expand_path("../../bin", "/tmp/x")   #=> "/bin"
+```
+
+`Dir.entries`返回一个路径下的所有文件.
+
+先将插件文件夹下的ruby文件加载到内存:
+```
+  def load_plugins
+    dir = File.join(File.dirname(__FILE__), "plugin")
+    load_plugin_dir(dir)
+    load_gem_plugins
+  end
+
+  def load_plugin_dir(dir)
+    dir = File.expand_path(dir)
+    Dir.entries(dir).sort.each {|fname|
+      if fname =~ /\.rb$/
+        require File.join(dir, fname)
+      end
+    }
+    nil
+  end
+```
+
+PluginClass将实例化一个对象，维护各种插件的类型和名字与代码类的对应关系，提供new等方法。
+下面是各个插件的基类:
+
+[input.rb](https://github.com/fluent/fluentd/blob/master/lib/fluent/input.rb)
+
+# 5
+
+有一个函数基本用法如下：[define_singleton_method](http://apidock.com/ruby/Object/define_singleton_method):
+
+```
+class A
+  class << self
+    def class_name
+      to_s
+    end
+  end
+end
+A.define_singleton_method(:who_am_i) do
+  "I am: #{class_name}"
+end
+A.who_am_i   # ==> "I am: A"
+
+guy = "Bob"
+guy.define_singleton_method(:hello) { "#{self}: Hello there!" }
+guy.hello    #=>  "Bob: Hello there!"
+
+```
+[mixin.rb](https://github.com/fluent/fluentd/blob/master/lib/fluent/mixin.rb)也使用这个函数：
+
+```
+ define_singleton_method(:format_nocache) {|time|
+          Time.at(time).strftime(format)
+        }
+```
+
+使用define_singleton_method不产生新的作用域，可以直接访问format参数.
+
+
+# 6. config.rb
+
+[config.rb](https://github.com/fluent/fluentd/blob/master/lib/fluent/config.rb) 这个模块的作用是解析fluentd的配置文件，配置文件的格式如下:
+
+```
+<source>
+  type mytail
+  path /Users/zhuoyikang/Project/galaxy-empire-server-2/log/track.txt
+  tag mongo.ge2
+  # format /^*(?<message>.*)$/
+</source>
+
+
+<match mongo.**>
+  type stdout
+  # type mongo
+  # database fluent
+  # collection access
+
+  # host localhost
+  # port 27017
+
+  flush_interval 10s 
+</match>
+
+## built-in TCP input
+## $ echo <json> | fluent-cat <tag>
+<source>
+  type forward
+</source>
+
+## built-in UNIX socket input
+#<source>
+#  type unix
+#</source>
+
+# HTTP input
+# http://localhost:8888/<tag>?json=<json>
+<source>
+  type http
+  port 8888
+</source>
+
+## File input
+## read apache logs with tag=apache.access
+#<source>
+#  type tail
+#  format apache
+#  path /var/log/httpd-access.log
+#  tag apache.access
+#</source>
+
+# Listen DRb for debug
+<source>
+  type debug_agent
+  port 24230
+</source>
+
+
+## match tag=apache.access and write to file
+#<match apache.access>
+#  type file
+#  path /var/log/fluent/access
+#</match>
+
+## match tag=debug.** and dump to console
+<match debug.**>
+  type stdout
+</match>
+
+## match tag=system.** and forward to another fluent server
+#<match system.**>
+#  type forward
+#  host 192.168.0.11
+#  <secondary>
+#    host 192.168.0.12
+#  </secondary>
+#</match>
+
+## match tag=myapp.** and forward and write to file
+#<match myapp.**>
+#  type copy
+#  <store>
+#    type forward
+#    host 192.168.0.13
+#    buffer_type file
+#    buffer_path /var/log/fluent/myapp-forward
+#    retry_limit 50
+#    flush_interval 10s
+#  </store>
+#  <store>
+#    type file
+#    path /var/log/fluent/myapp
+#  </store>
+#</match>
+
+## match fluent's internal events
+#<match fluent.**>
+#  type null
+#</match>
+
+## match not matched logs and write to file
+#<match **>
+#  type file
+#  path /var/log/fluent/else
+#  compress gz
+#</match>
+
+
+```
+
+这种配置文件简单易懂，是一个树形结构，运用了常见的组合模式，并且支持文件包含，这个东东可以在其他项目中直接拷贝过去使用.
+
+
+
+`module Configurable`用来给其他模块包含，使用一种比较普遍的ruby编程模式:
+
+```
+module SomeModule
+    def self.included(mod)
+       mod.extend(ClassMethods)
+    end
+
+    module ClassMethods
+       def some_method
+       end
+    end
+end
+
+# 这样include SomeModule的类将包含ClassMethods模块中的方法为类方法。
+```
+
+config_param 是一个类宏，用来定义参数，比如buffer.rb里面的:
+
+```
+config_param :buffer_chunk_limit, :size, :default => 8*1024*1024
+config_param :buffer_queue_limit, :integer, :default => 256
+
+```
+
+定义格式为:`config_param 参数名字, 参数类型, 参数Option`
+
+参数类型有:
+
+```
+      block ||= case type
+          when :string, nil
+            Proc.new {|val| val }
+          when :integer
+            Proc.new {|val| val.to_i }
+          when :float
+            Proc.new {|val| val.to_f }
+          when :size
+            Proc.new {|val| Config.size_value(val) }
+          when :bool
+            Proc.new {|val| Config.bool_value(val) }
+          when :time
+            Proc.new {|val| Config.time_value(val) }
+          else
+            raise ArgumentError, "unknown config_param type `#{type}'"
+          end
+
+```
+
+```
+    module ClassMethods
+    def config_param(name, *args, &block)
+      name = name.to_sym
+
+```
+
